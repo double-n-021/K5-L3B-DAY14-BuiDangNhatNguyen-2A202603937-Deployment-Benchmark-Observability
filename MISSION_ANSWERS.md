@@ -94,7 +94,34 @@ X-XSS-Protection: 1; mode=block
 ---
 
 ## Part 3: Cloud Deployment
-*(Sẽ cập nhật sau CP6 — sau khi hoàn thiện và deploy agent Part 6)*
+
+### Exercise 3.1 / 3.2: Deploy Agent Part 6 (`06-lab-complete/`) lên Render
+- **Nền tảng chính:** Render (Docker Web Service với `Root Directory: 06-lab-complete/` + Render Key Value / Redis Free).
+- **Public URL:** https://k5-l3b-day14-buidangnhatnguyen.onrender.com
+- **Screenshots:** `screenshots/dashboard.png`, `screenshots/running.png`, `screenshots/test.png` (chi tiết xem `DEPLOYMENT.md`).
+- **Kết quả 4 lệnh tự kiểm chuẩn CP6:**
+```text
+/health         -> 200
+/ready          -> 200
+/ask (no key)   -> 401
+/ask (with key) -> 200
+```
+
+### So sánh `railway.toml` vs `render.yaml`
+| Tiêu chí | `railway.toml` (Railway) | `render.yaml` (Render Blueprint) |
+|---|---|---|
+| Định dạng & phạm vi | TOML — cấu hình **1 service** (build & deploy settings cho thư mục hiện tại) | YAML (Infrastructure as Code) — khai báo được **cả stack nhiều service** (`services:`, `databases:`) trong 1 file |
+| Khai báo build/runtime | `[build] builder = "DOCKERFILE"`, `dockerfilePath = "Dockerfile"` | `type: web`, `runtime: docker`, `plan: free` |
+| Quản lý biến môi trường & secret | Biến môi trường & secret thường đặt trên Dashboard/CLI (`railway variables set`) hoặc tham chiếu biến giữa các service (`${{Redis.REDIS_URL}}`) | Khai báo trực tiếp `envVars:` trong YAML; secret bắt buộc tách khỏi git bằng `generateValue: true` (Render tự sinh) hoặc `sync: false` (nhập tay trên dashboard) |
+| Health check & Restart | `[deploy] healthcheckPath = "/health"`, `healthcheckTimeout`, `restartPolicyType = "ON_FAILURE"` | `healthCheckPath: /health` (Render tự kiểm tra trong quá trình zero-downtime deploy) |
+| Mục đích sử dụng | Nhanh gọn cho từng service riêng lẻ, mạnh về trải nghiệm CLI/UI | Chuẩn IaC: đồng bộ hạ tầng đa dịch vụ tái lập được qua Git (Blueprint) |
+
+### Exercise 3.3: Mô tả CI/CD Pipeline GCP Cloud Run (`03-cloud-deployment/production-cloud-run/`)
+Pipeline trong `cloudbuild.yaml` kết hợp `service.yaml` gồm 4 bước tuần tự (dùng `waitFor` để chặn nếu bước trước lỗi):
+1. **Test (`test`):** Chạy `pytest tests/` trên `python:3.11-slim` để đảm bảo code qua unit test trước khi đóng gói.
+2. **Build (`build`):** Build Docker image gắn cả tag `$COMMIT_SHA` (bất biến để rollback) và `latest`, tận dụng `--cache-from` để tăng tốc build.
+3. **Push (`push`):** Đẩy các tag image lên Google Container Registry (`gcr.io/$PROJECT_ID/ai-agent`).
+4. **Deploy (`deploy`):** Gọi `gcloud run deploy` triển khai image `$COMMIT_SHA` lên Cloud Run vùng `asia-southeast1`, cấu hình autoscale `min-instances=1` (tránh cold start) đến `max-instances=10`, giới hạn `1 CPU / 512Mi RAM`, `containerConcurrency: 80`, lấy secret từ Secret Manager (`--set-secrets` / `secretKeyRef`) và gắn `livenessProbe` (`/health`) + `startupProbe` (`/ready`) theo `service.yaml`.
 
 ---
 
@@ -263,3 +290,11 @@ Chạy đầy đủ trên VPS Linux Ubuntu 24.04 (`os.name = posix`, Docker `29.
   - *Hỏi gì:* Kiến trúc 6 module Python (`config`, `redis_client`, `auth`, `rate_limiter`, `cost_guard`, `main`), cách viết `JsonFormatter` độc lập, Redis Sorted Set sliding window, `Dockerfile` multi-stage với `/opt/venv` và `exec uvicorn` làm PID 1 để `docker stop` trả exit code 0.
   - *Nhận gì:* Phân tích chi tiết từng tiêu chí chấm điểm và khung thiết kế 6 module + 5 file hạ tầng (`Dockerfile`, `docker-compose.yml`, `.dockerignore`, `railway.toml`, `render.yaml`).
   - *Tự sửa & tự kiểm tra:* Tự kiểm tra baseline (`0/12`), triển khai Chặng 5A và xác minh bằng `--skip-docker` (pass toàn bộ runtime), triển khai Chặng 5B và chạy đầy đủ `python check_production_ready.py` đạt **`PASS 12/12` (43/43 checks, image 63 MB, docker stop 0.7s)** mà không chỉnh sửa `check_production_ready.py`.
+- **CP6 (Part 3 — Cloud Deployment trên Render):**
+  - *Hỏi gì:* Quy trình tạo nhánh feature, mở PR đúng vào repo fork thay vì repo gốc, cấu hình Root Directory + Redis + Environment Variables trên Render, cách kiểm thử 4 endpoint và so sánh `railway.toml` / `render.yaml` / Cloud Run CI/CD.
+  - *Nhận gì:* Hướng dẫn chuẩn GitHub Flow, checklist cấu hình Render, khung `DEPLOYMENT.md` và đối chiếu kỹ thuật `railway.toml` vs `render.yaml` và `cloudbuild.yaml`/`service.yaml`.
+  - *Tự sửa & tự kiểm tra:* Tự tạo nhánh `feat/cp1-cp5-production-agent`, mở và merge PR #1 vào `main`, tạo Render Key Value (Redis) và đặt biến môi trường trên dashboard, kích hoạt deploy bản mới `027fdf5` lên `Live`, tự chạy 4 lệnh `curl` xác nhận `200 / 200 / 401 / 200`.
+- **CP7 & CP8 (Part 7 — Benchmark, Eval & Observability Stack):**
+  - *Hỏi gì:* Quy trình chạy load test 4 mức concurrency và 3 mức `MOCK_SLOW_RATE`, sửa `KNOWLEDGE_BASE` (không sửa `golden_dataset.jsonl`), khắc phục 3 lỗi thực chiến khi chạy CP8 trên VPS (`PYTHONUSERBASE` cho non-root agent container, quyền ghi `benchmark-results/` cho Locust UID 1000, cờ `--no-deps` giữ đúng `--scale agent=1/3`), SSH port forwarding xem UI an toàn và đồng bộ số liệu thật vào `BENCHMARK_REPORT.md`.
+  - *Nhận gì:* Phân tích nguyên nhân từng lỗi Docker/Linux, hướng dẫn cô lập port qua `/tmp/day14-cp8-override.yml`, script đối chiếu Prometheus Alerts API và script trích xuất trực tiếp số liệu từ JSON/CSV vào `BENCHMARK_REPORT.md`.
+  - *Tự sửa & tự kiểm tra:* Tự chạy lại sạch 3 mức `MOCK_SLOW_RATE` sau khi dọn cổng `8001/8002`, tự đạt eval `23/23 (100%)` không regression, tự chạy `promtool` PASS, xuất đủ `scale_1_stats.csv` & `scale_3_stats.csv`, tự chụp đủ 4 ảnh Grafana/Jaeger/Prometheus (2 alert cùng `FIRING`), đối chiếu khớp 100% số liệu giữa `BENCHMARK_REPORT.md` với JSON/CSV thật và dọn sạch stack sau khi hoàn thành.
